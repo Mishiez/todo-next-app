@@ -1,0 +1,48 @@
+query GetProjects {
+  getProjects {
+    id
+    name
+    tasks {
+      id
+      text
+      completed
+    }
+  }
+}
+
+mutation CreateProject($name: String!) {
+  createProject(name: $name) {
+    id
+    name
+    tasks {
+      id
+    }
+  }
+}
+
+mutation CreateTask($text: String!, $projectId: ID!) {
+  createTask(text: $text, projectId: $projectId) {
+    id
+    text
+    completed
+    project {
+      id
+    }
+  }
+}
+
+mutation UpdateTask($id: ID!, $completed: Boolean!) {
+  updateTask(id: $id, completed: $completed) {
+    id
+    text
+    completed
+  }
+}
+
+mutation DeleteTask($id: ID!) {
+  deleteTask(id: $id)
+}
+
+mutation DeleteProject($id: ID!) {
+  deleteProject(id: $id)
+}

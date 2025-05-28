@@ -1,6 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import {
+  useRetrieveProjectsQuery,
+  useCreateProjectMutation,
+  useCreateProjectTaskMutation,
+  useDeleteProjectTaskMutation,
+  useDeleteProjectMutation
+} from '../../../lib/generated/graphql';
 
 interface Task {
   text: string;
@@ -10,6 +17,7 @@ interface Task {
 interface Project {
   name: string;
   tasks: Task[];
+  completed: boolean;
 }
 
 export default function TodoListSimple() {
@@ -17,31 +25,78 @@ export default function TodoListSimple() {
   const [newProjectName, setNewProjectName] = useState('');
   const [newTask, setNewTask] = useState('');
   const [selectedProjectIndex, setSelectedProjectIndex] = useState<number | null>(null);
+  const [showCompleted, setShowCompleted] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const { data } = useRetrieveProjectsQuery();
 
-  // Load projects from localStorage on mount
+  const [createProjectMutation] = useCreateProjectMutation();
+  const [createTaskMutation] = useCreateProjectTaskMutation();
+  const [deleteTaskMutation] = useDeleteProjectTaskMutation();
+  const [deleteProjectMutation] = useDeleteProjectMutation();
+
   useEffect(() => {
-    const savedProjects = localStorage.getItem('projects');
-    if (savedProjects) {
-      setProjects(JSON.parse(savedProjects));
+    const loginStatus = localStorage.getItem('loggedIn');
+    if (loginStatus === 'true') {
+      setIsLoggedIn(true);
     }
   }, []);
 
-  // Save projects to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem('projects', JSON.stringify(projects));
-  }, [projects]);
+    if (data?.retrieveProjects) {
+      const transformed = data.retrieveProjects.map((p) => ({
+        name: p.name,
+        tasks: [],
+        completed: false
+      }));
+      setProjects(transformed);
+    }
+  }, [data]);
 
-  // Add a new project
-  const addProject = () => {
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (email && password) {
+      localStorage.setItem('loggedIn', 'true');
+      setIsLoggedIn(true);
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('loggedIn');
+    setIsLoggedIn(false);
+  };
+
+  const addProject = async () => {
     if (newProjectName.trim()) {
-      setProjects([...projects, { name: newProjectName, tasks: [] }]);
+      const dueDate = new Date('2025-12-31T00:00:00.000Z');
+      const formattedDate = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, '0')}-${String(dueDate.getDate()).padStart(2, '0')} ${String(dueDate.getHours() + 3).padStart(2, '0')}:${String(dueDate.getMinutes()).padStart(2, '0')}:${String(dueDate.getSeconds()).padStart(2, '0')}.000000 +0300`;
+
+      await createProjectMutation({
+        variables: {
+          args: {
+            name: newProjectName,
+            description: 'Created from frontend',
+            dateDue: formattedDate
+          }
+        }
+      });
+      setProjects([...projects, { name: newProjectName, tasks: [], completed: false }]);
       setNewProjectName('');
     }
   };
 
-  // Add a task to the selected project
-  const addTask = () => {
+  const addTask = async () => {
     if (newTask.trim() && selectedProjectIndex !== null) {
+      await createTaskMutation({
+        variables: {
+          args: {
+            name: newTask,
+            description: 'Task added from frontend',
+            projectId: selectedProjectIndex + 1
+          }
+        }
+      });
       const updatedProjects = projects.map((project, index) =>
         index === selectedProjectIndex
           ? { ...project, tasks: [...project.tasks, { text: newTask, completed: false }] }
@@ -52,7 +107,6 @@ export default function TodoListSimple() {
     }
   };
 
-  // Toggle task completion
   const toggleTaskCompletion = (projectIndex: number, taskIndex: number) => {
     const updatedProjects = projects.map((project, pIndex) =>
       pIndex === projectIndex
@@ -60,15 +114,24 @@ export default function TodoListSimple() {
             ...project,
             tasks: project.tasks.map((task, tIndex) =>
               tIndex === taskIndex ? { ...task, completed: !task.completed } : task
-            ),
+            )
           }
         : project
     );
     setProjects(updatedProjects);
   };
 
-  // Delete a task
-  const deleteTask = (projectIndex: number, taskIndex: number) => {
+  const toggleProjectCompletion = (projectIndex: number) => {
+    const updatedProjects = projects.map((project, pIndex) =>
+      pIndex === projectIndex ? { ...project, completed: !project.completed } : project
+    );
+    setProjects(updatedProjects);
+  };
+
+  const deleteTask = async (projectIndex: number, taskIndex: number) => {
+    await deleteTaskMutation({
+      variables: { taskId: taskIndex + 1 }
+    });
     const updatedProjects = projects.map((project, pIndex) =>
       pIndex === projectIndex
         ? { ...project, tasks: project.tasks.filter((_, tIndex) => tIndex !== taskIndex) }
@@ -77,8 +140,10 @@ export default function TodoListSimple() {
     setProjects(updatedProjects);
   };
 
-  // Delete a project
-  const deleteProject = (projectIndex: number) => {
+  const deleteProject = async (projectIndex: number) => {
+    await deleteProjectMutation({
+      variables: { projectId: projectIndex + 1 }
+    });
     const updatedProjects = projects.filter((_, pIndex) => pIndex !== projectIndex);
     setProjects(updatedProjects);
     if (selectedProjectIndex === projectIndex) {
@@ -86,118 +151,145 @@ export default function TodoListSimple() {
     }
   };
 
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-r from-yellow-100 to-orange-200 p-4">
+        <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-md transform transition-all duration-300 hover:shadow-xl">
+          <h2 className="text-3xl font-bold text-yellow-800 text-center mb-6">Welcome Back!</h2>
+          <div className="space-y-4">
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Enter your email"
+              required
+              className="w-full p-4 border border-yellow-300 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition-all duration-200"
+            />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
+              required
+              className="w-full p-4 border border-yellow-300 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition-all duration-200"
+            />
+            <button
+              onClick={handleLogin}
+              className="w-full bg-yellow-500 text-white p-4 rounded-xl hover:bg-yellow-600 transition-all duration-200 transform hover:scale-105"
+            >
+              Log In
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-100 to-orange-300">
-      <header className="bg-gradient-to-r from-blue-600 to-blue-800 text-white p-6 shadow-lg">
-        <div className="max-w-4xl mx-auto flex flex-col items-center">
-          <h1 className="text-3xl font-bold">Simple Todo List</h1>
-          <p className="text-sm mt-2 opacity-90">
-            Current Time: Tuesday, May 27, 2025, 12:22 PM EAT
+    <div className="min-h-screen bg-gradient-to-br from-yellow-100 via-orange-200 to-pink-200 flex flex-col items-center justify-center p-6">
+      <header className="bg-gradient-to-r from-yellow-500 to-orange-500 text-white p-6 rounded-2xl shadow-xl w-full max-w-3xl mb-8">
+        <div className="text-center">
+          <h1 className="text-4xl font-extrabold tracking-tight">Todo Adventure</h1>
+          <p className="text-base mt-2 text-orange-50">
+            Current Time: {new Date().toLocaleString('en-US', { timeZone: 'Africa/Nairobi' })}
           </p>
+          <button
+            onClick={logout}
+            className="mt-4 bg-white text-yellow-700 px-5 py-2 rounded-full hover:bg-yellow-100 transition-all duration-200 transform hover:scale-105"
+          >
+            Log Out
+          </button>
         </div>
       </header>
-      <main className="max-w-4xl mx-auto mt-8 p-6">
-        <div className="bg-white rounded-xl p-6 shadow-xl hover:shadow-2xl transition-shadow duration-300">
-          <h2 className="text-2xl font-semibold mb-6 text-gray-800">Projects and Tasks</h2>
 
-          {/* Form to add a new project */}
-          <div className="mb-6 p-4 bg-gray-50 rounded-lg shadow-md hover:bg-gray-100 transition-colors">
-            <div className="flex items-center space-x-4">
-              <input
-                type="text"
-                className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
-                placeholder="Add a new project..."
-              />
-              <button
-                onClick={addProject}
-                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 transition-all duration-200"
-              >
-                Add Project
-              </button>
-            </div>
+      <main className="w-full max-w-3xl bg-white rounded-3xl shadow-2xl p-8 border border-yellow-200 transform transition-all duration-300 hover:shadow-xl">
+        <h2 className="text-2xl font-bold text-yellow-800 mb-8 text-center">Your Projects & Tasks</h2>
+
+        <div className="space-y-6 mb-8">
+          <div className="flex flex-col sm:flex-row items-center gap-3">
+            <input
+              type="text"
+              className="flex-1 p-4 border border-yellow-300 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition-all duration-200"
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              placeholder="Add a new project..."
+            />
+            <button
+              onClick={addProject}
+              className="w-full sm:w-auto bg-green-500 text-white px-6 py-3 rounded-xl hover:bg-green-600 transition-all duration-200 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={!newProjectName.trim()}
+            >
+              Add Project
+            </button>
           </div>
 
-          {/* Form to add a task to a selected project */}
-          <div className="mb-6 p-4 bg-gray-50 rounded-lg shadow-md hover:bg-gray-100 transition-colors">
-            <div className="flex items-center space-x-4">
-              <select
-                className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                value={selectedProjectIndex !== null ? selectedProjectIndex : ''}
-                onChange={(e) => setSelectedProjectIndex(e.target.value ? parseInt(e.target.value) : null)}
-              >
-                <option value="">Select a project</option>
-                {projects.map((project, index) => (
-                  <option key={index} value={index}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="text"
-                className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                value={newTask}
-                onChange={(e) => setNewTask(e.target.value)}
-                placeholder="Add a new task..."
-                disabled={selectedProjectIndex === null}
-              />
+          <div className="flex flex-col sm:flex-row items-center gap-3">
+            <select
+              className="flex-1 p-4 border border-yellow-300 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition-all duration-200"
+              value={selectedProjectIndex ?? ''}
+              onChange={(e) => setSelectedProjectIndex(e.target.value ? parseInt(e.target.value) : null)}
+            >
+              <option value="">Select a project</option>
+              {projects.map((project, index) => (
+                <option key={index} value={index}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <input
+              type="text"
+              className="flex-1 p-4 border border-yellow-300 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition-all duration-200"
+              value={newTask}
+              onChange={(e) => setNewTask(e.target.value)}
+              placeholder="Add a new task..."
+              disabled={selectedProjectIndex === null}
+            />
+            <button
+              onClick={addTask}
+              className="w-full sm:w-auto bg-blue-500 text-white px-6 py-3 rounded-xl hover:bg-blue-600 transition-all duration-200 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={selectedProjectIndex === null || !newTask.trim()}
+            >
+              Add Task
+            </button>
+          </div>
+        </div>
+
+        {projects.map((project, pIndex) => (
+          <div key={pIndex} className="bg-yellow-50 rounded-xl p-4 mb-6 shadow-md">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-lg font-semibold text-yellow-900">{project.name}</h3>
               <button
-                onClick={addTask}
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                disabled={selectedProjectIndex === null}
+                onClick={() => deleteProject(pIndex)}
+                className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
               >
-                Add Task
+                Delete Project
               </button>
             </div>
-          </div>
-
-          {/* List of projects and their tasks */}
-          {projects.length === 0 ? (
-            <p className="text-gray-600 text-center py-6 bg-gray-50 rounded-lg">No projects yet. Add one to get started!</p>
-          ) : (
-            <div className="space-y-6">
-              {projects.map((project, projectIndex) => (
-                <div key={projectIndex} className="bg-white p-4 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 border border-gray-200">
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-semibold text-gray-800">{project.name}</h2>
+            <ul className="space-y-2">
+              {project.tasks.map((task, tIndex) => (
+                <li key={tIndex} className="flex justify-between items-center bg-white p-2 rounded shadow-sm">
+                  <span className={task.completed ? 'line-through text-gray-400' : 'text-yellow-900'}>
+                    {task.text}
+                  </span>
+                  <div className="space-x-2">
                     <button
-                      onClick={() => deleteProject(projectIndex)}
-                      className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all duration-200"
+                      onClick={() => toggleTaskCompletion(pIndex, tIndex)}
+                      className="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600"
                     >
-                      Delete Project
+                      {task.completed ? 'Undo' : 'Done'}
+                    </button>
+                    <button
+                      onClick={() => deleteTask(pIndex, tIndex)}
+                      className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
+                    >
+                      Delete
                     </button>
                   </div>
-                  {project.tasks.length === 0 ? (
-                    <p className="text-gray-500 italic">No tasks yet. Add some to this project!</p>
-                  ) : (
-                    <ul className="space-y-3">
-                      {project.tasks.map((task, taskIndex) => (
-                        <li
-                          key={taskIndex}
-                          className="flex justify-between items-center p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors duration-200"
-                        >
-                          <span
-                            className={`flex-1 cursor-pointer ${task.completed ? 'line-through text-gray-500' : 'text-gray-800'}`}
-                            onClick={() => toggleTaskCompletion(projectIndex, taskIndex)}
-                          >
-                            {task.text}
-                          </span>
-                          <button
-                            onClick={() => deleteTask(projectIndex, taskIndex)}
-                            className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 transition-all duration-200"
-                          >
-                            Delete
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+                </li>
               ))}
-            </div>
-          )}
-        </div>
+            </ul>
+          </div>
+        ))}
       </main>
     </div>
   );
